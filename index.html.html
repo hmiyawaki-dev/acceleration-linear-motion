@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>等加速度直線運動シミュレーター</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            margin: 20px;
+            color: #333;
+        }
+        .controls, .graph-toggles {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+        }
+        .controls label, .graph-toggles label {
+            margin-right: 20px;
+            font-weight: bold;
+        }
+        .controls input[type="number"] {
+            width: 70px;
+            padding: 5px;
+            font-size: 16px;
+        }
+        button {
+            padding: 8px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            color: #fff;
+            background-color: #007bff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button#resetBtn {
+            background-color: #6c757d;
+        }
+        button#resetBtn:hover {
+            background-color: #5a6268;
+        }
+        
+        /* シミュレーション画面のデザイン（横スクロール対応） */
+        #simulation-wrapper {
+            width: 100%;
+            overflow-x: auto;
+            border: 1px solid #ced4da;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            background-color: #e9ecef;
+        }
+        #simulation-area {
+            position: relative;
+            /* widthはJSで動的に設定されます */
+            height: 250px;
+        }
+        #x-axis {
+            position: absolute;
+            bottom: 50px;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background-color: #212529;
+        }
+        #x-axis::after {
+            content: "x (m) ➔";
+            position: absolute;
+            right: 15px;
+            top: -25px;
+            font-weight: bold;
+        }
+
+        /* 目盛りとプロットのデザイン */
+        .tick {
+            position: absolute;
+            bottom: 45px;
+            width: 2px;
+            height: 10px;
+            background-color: #212529;
+            transform: translateX(-50%);
+        }
+        .tick-label {
+            position: absolute;
+            bottom: 25px;
+            transform: translateX(-50%);
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .plot-mark {
+            position: absolute;
+            bottom: 45px;
+            width: 4px;
+            height: 10px;
+            background-color: #27ae60;
+            transform: translateX(-50%);
+            z-index: 5;
+        }
+        .plot-label {
+            position: absolute;
+            bottom: 60px;
+            transform: translateX(-50%);
+            font-size: 12px;
+            font-weight: bold;
+            color: #27ae60;
+            text-align: center;
+            line-height: 1.2;
+            white-space: pre;
+            background-color: rgba(255,255,255,0.7);
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+        
+        /* 小球と速さ表示のデザイン */
+        #ball {
+            position: absolute;
+            bottom: 41px;
+            left: 50px;
+            width: 20px;
+            height: 20px;
+            background-color: #e74c3c;
+            border-radius: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+        }
+        #speed-label {
+            position: absolute;
+            top: -35px;
+            left: -20px;
+            width: 60px;
+            text-align: center;
+            font-size: 14px;
+            font-weight: bold;
+            color: #fff;
+            background-color: rgba(44, 62, 80, 0.8);
+            border-radius: 4px;
+            padding: 2px;
+        }
+
+        /* グラフエリアのデザイン */
+        .graph-container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .graph-box {
+            flex: 1;
+            min-width: 300px;
+            display: none;
+            background: #fff;
+            padding: 15px;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>等加速度直線運動シミュレーター</h2>
+
+    <div class="controls">
+        <label>初速度 v0 (m/s): <input type="number" id="v0" value="-10" step="1"></label>
+        <label>加速度 a (m/s²): <input type="number" id="a" value="2" step="0.5"></label>
+        <button id="startBtn">スタート</button>
+        <button id="resetBtn">リセット</button>
+        <span id="time-display" style="margin-left: 20px; font-weight: bold;">時間: 0.0 s</span>
+    </div>
+
+    <div class="graph-toggles">
+        <label><input type="checkbox" id="vtToggle"> v-tグラフを表示</label>
+        <label><input type="checkbox" id="xtToggle"> x-tグラフを表示</label>
+    </div>
+
+    <div id="simulation-wrapper">
+        <div id="simulation-area">
+            <div id="x-axis"></div>
+            <div id="markers-container"></div>
+            <div id="ball">
+                <div id="speed-label">0.0 m/s</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="graph-container">
+        <div class="graph-box" id="vtBox"><canvas id="vtGraph"></canvas></div>
+        <div class="graph-box" id="xtBox"><canvas id="xtGraph"></canvas></div>
+    </div>
+
+    <script>
+        // 定数と変数の設定
+        const PIXELS_PER_METER = 15; 
+        const MAX_TIME = 10;     
+        
+        let ORIGIN_X = 50;
+        let currentMinX = 0;
+        let currentMaxX = 80;
+
+        let animationId;
+        let startTime = null;
+        let isRunning = false;
+        let v0 = 0;
+        let a = 0;
+        let lastGraphUpdateTime = 0;
+        let nextPlotTime = 1.0; 
+
+        // DOM要素
+        const ball = document.getElementById('ball');
+        const speedLabel = document.getElementById('speed-label');
+        const timeDisplay = document.getElementById('time-display');
+        const startBtn = document.getElementById('startBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const simulationArea = document.getElementById('simulation-area');
+        const markersContainer = document.getElementById('markers-container');
+
+        // グラフの初期化
+        const ctxVt = document.getElementById('vtGraph').getContext('2d');
+        const ctxXt = document.getElementById('xtGraph').getContext('2d');
+
+        const chartConfig = {
+            type: 'scatter',
+            options: {
+                responsive: true,
+                animation: false,
+                scales: {
+                    x: { 
+                        type: 'linear', position: 'bottom', 
+                        title: { display: true, text: '時間 t (s)' },
+                        min: 0, max: MAX_TIME
+                    }
+                },
+                elements: { point: { radius: 0 }, line: { tension: 0 } }
+            }
+        };
+
+        const vtChart = new Chart(ctxVt, {
+            ...chartConfig,
+            data: { datasets: [{ label: '速度 v (m/s)', borderColor: '#e74c3c', showLine: true, data: [] }] },
+            options: { ...chartConfig.options, scales: { ...chartConfig.options.scales, y: { title: { display: true, text: '速度 v (m/s)' }, min: 0, max: 50 } } }
+        });
+
+        const xtChart = new Chart(ctxXt, {
+            ...chartConfig,
+            data: { datasets: [{ label: '変位 x (m)', borderColor: '#3498db', showLine: true, data: [] }] },
+            options: { ...chartConfig.options, scales: { ...chartConfig.options.scales, y: { title: { display: true, text: '変位 x (m)' }, min: 0, max: 80 } } }
+        });
+
+        // 環境の動的セットアップ（マイナス発生の先読み計算とUI再構築）
+        function setupEnvironment(v0_val, a_val) {
+            // 1. 10秒間に速度vがマイナスになるか判定
+            const minV = Math.min(v0_val, v0_val + a_val * MAX_TIME);
+            const hasNegV = minV < 0;
+
+            // 2. 10秒間に変位xがマイナスになるか判定
+            let minX = 0;
+            const x10 = v0_val * MAX_TIME + 0.5 * a_val * Math.pow(MAX_TIME, 2);
+            minX = Math.min(minX, x10);
+            
+            // 放物線の頂点（折り返し地点）が10秒以内に存在するかチェック
+            if (a_val !== 0) {
+                const tv = -v0_val / a_val;
+                if (tv > 0 && tv < MAX_TIME) {
+                    const xv = v0_val * tv + 0.5 * a_val * Math.pow(tv, 2);
+                    minX = Math.min(minX, xv);
+                }
+            }
+            const hasNegX = minX < 0;
+
+            // 3. アニメーション領域・スケールの決定
+            currentMinX = hasNegX ? -50 : 0;
+            currentMaxX = hasNegX ? 50 : 80;
+            ORIGIN_X = currentMinX < 0 ? 50 + Math.abs(currentMinX) * PIXELS_PER_METER : 50;
+
+            // 古い目盛りを削除して再構築
+            document.querySelectorAll('.tick, .tick-label').forEach(e => e.remove());
+            simulationArea.style.width = `${(currentMaxX - currentMinX) * PIXELS_PER_METER + 100}px`;
+            
+            for (let i = currentMinX; i <= currentMaxX; i += 10) {
+                const px = ORIGIN_X + i * PIXELS_PER_METER;
+                const tick = document.createElement('div');
+                tick.className = 'tick';
+                tick.style.left = `${px}px`;
+                const label = document.createElement('div');
+                label.className = 'tick-label';
+                label.innerText = i;
+                label.style.left = `${px}px`;
+                simulationArea.appendChild(tick);
+                simulationArea.appendChild(label);
+            }
+
+            ball.style.left = `${ORIGIN_X}px`;
+
+            // 4. グラフのスケール更新
+            vtChart.options.scales.y.min = hasNegV ? -25 : 0;
+            vtChart.options.scales.y.max = hasNegV ? 25 : 50;
+            
+            xtChart.options.scales.y.min = hasNegX ? -50 : 0;
+            xtChart.options.scales.y.max = hasNegX ? 50 : 80;
+            
+            vtChart.update();
+            xtChart.update();
+        }
+
+        // 1秒ごとのプロットを追加
+        function addPlotMark(t, x) {
+            const px = ORIGIN_X + x * PIXELS_PER_METER;
+            const mark = document.createElement('div');
+            mark.className = 'plot-mark';
+            mark.style.left = `${px}px`;
+            const label = document.createElement('div');
+            label.className = 'plot-label';
+            label.innerText = `t=${t.toFixed(1)}s\nx=${x.toFixed(1)}m`;
+            label.style.left = `${px}px`;
+            markersContainer.appendChild(mark);
+            markersContainer.appendChild(label);
+        }
+
+        // 物理エンジンのメインループ
+        function animate(timestamp) {
+            if (!startTime) startTime = timestamp;
+            const t = (timestamp - startTime) / 1000;
+            const v = v0 + a * t;
+            const x = v0 * t + 0.5 * a * Math.pow(t, 2);
+
+            // 画面の更新
+            ball.style.left = `${ORIGIN_X + x * PIXELS_PER_METER}px`;
+            speedLabel.innerText = `${v.toFixed(1)} m/s`;
+            timeDisplay.innerText = `時間: ${t.toFixed(1)} s`;
+
+            // 1秒ごとのプロット描画
+            if (t >= nextPlotTime) {
+                const exactX = v0 * nextPlotTime + 0.5 * a * Math.pow(nextPlotTime, 2);
+                if (exactX >= currentMinX && exactX <= currentMaxX && nextPlotTime <= MAX_TIME) {
+                    addPlotMark(nextPlotTime, exactX);
+                }
+                nextPlotTime += 1.0;
+            }
+
+            // グラフの更新
+            if (t - lastGraphUpdateTime >= 0.02) { 
+                vtChart.data.datasets[0].data.push({ x: t, y: v });
+                xtChart.data.datasets[0].data.push({ x: t, y: x });
+                vtChart.update();
+                xtChart.update();
+                lastGraphUpdateTime = t;
+            }
+
+            // 設定した範囲の端に到達するか、時間が最大に達したら自動停止
+            if (x >= currentMaxX || x <= currentMinX || t >= MAX_TIME) {
+                isRunning = false;
+                startBtn.innerText = "スタート";
+                return; 
+            }
+
+            if (isRunning) {
+                animationId = requestAnimationFrame(animate);
+            }
+        }
+
+        // リセット処理
+        function resetSimulation() {
+            cancelAnimationFrame(animationId);
+            isRunning = false;
+            startTime = null;
+            lastGraphUpdateTime = 0;
+            nextPlotTime = 1.0;
+            startBtn.innerText = "スタート";
+            
+            ball.style.left = `${ORIGIN_X}px`;
+            speedLabel.innerText = "0.0 m/s";
+            timeDisplay.innerText = "時間: 0.0 s";
+            markersContainer.innerHTML = ''; 
+
+            vtChart.data.datasets[0].data = [];
+            xtChart.data.datasets[0].data = [];
+            vtChart.update();
+            xtChart.update();
+        }
+
+        // スタート・一時停止・自動リセットの制御
+        startBtn.addEventListener('click', () => {
+            const inputV0 = parseFloat(document.getElementById('v0').value);
+            const inputA = parseFloat(document.getElementById('a').value);
+
+            if (isRunning) {
+                cancelAnimationFrame(animationId);
+                isRunning = false;
+                startBtn.innerText = "再開";
+            } else {
+                // 条件が変更されたり終了後にリスタートされた場合は環境を再構築
+                if (startTime !== null && (inputV0 !== v0 || inputA !== a || startBtn.innerText === "スタート")) {
+                    resetSimulation();
+                    v0 = inputV0;
+                    a = inputA;
+                    setupEnvironment(v0, a);
+                } else if (startTime === null) {
+                    v0 = inputV0;
+                    a = inputA;
+                    setupEnvironment(v0, a);
+                }
+
+                if (startTime === null) {
+                    startTime = performance.now();
+                } else {
+                    const currentT = parseFloat(timeDisplay.innerText.replace(/[^0-9.]/g, ''));
+                    startTime = performance.now() - (currentT * 1000);
+                }
+                
+                isRunning = true;
+                startBtn.innerText = "一時停止";
+                animationId = requestAnimationFrame(animate);
+            }
+        });
+
+        // 手動リセットボタン
+        resetBtn.addEventListener('click', () => {
+            resetSimulation();
+            document.getElementById('v0').value = "0";
+            document.getElementById('a').value = "2";
+            setupEnvironment(0, 2);
+        });
+
+        // グラフの表示切替
+        document.getElementById('vtToggle').addEventListener('change', (e) => {
+            document.getElementById('vtBox').style.display = e.target.checked ? 'block' : 'none';
+        });
+
+        document.getElementById('xtToggle').addEventListener('change', (e) => {
+            document.getElementById('xtBox').style.display = e.target.checked ? 'block' : 'none';
+        });
+
+        // 初期読み込み時の環境セットアップ
+        setupEnvironment(parseFloat(document.getElementById('v0').value), parseFloat(document.getElementById('a').value));
+
+    </script>
+</body>
+</html>
